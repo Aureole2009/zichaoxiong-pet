@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The bundle is committed, so it must stay byte-identical to a fresh build.
+      - name: Rebuild the client bundle
+        run: node tools/build-client.mjs
+
+      - name: Committed bundle is up to date
+        run: git diff --exit-code -- lib/client.js
+
+      - name: Plugin contract (loader wrapper, manifest, patch row, assets)
+        run: node test/verify-contract.mjs
+
+      # The bundler must ABORT on source it cannot handle, never ship a broken bundle.
+      - name: Bundler failure modes
+        run: node test/verify-bundler.mjs
+
+      # Real browser, no npm dependencies: fake loader + fake slots + fake sessions.
+      - name: Offline integration harness
+        run: node test/run-harness.mjs

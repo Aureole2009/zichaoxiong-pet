@@ -1,0 +1,7 @@
+# 自嘲熊桌宠 bundle patch：把自己的客户端入口插进 web 插件花名册。
+# 行 id 是之后开关插件用的把手：
+#   - id: ui-pet-zichaoxiong
+#     disabled: true          # 写进 <DSH_HOME>/profiles/web/cordis.patch.yml 即可停用
+- insert:
+    - id: ui-pet-zichaoxiong
+      name: 'dsh-client-ui-pet-zichaoxiong'

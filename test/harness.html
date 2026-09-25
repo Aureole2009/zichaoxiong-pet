@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>桌宠插件离线集成测试</title>
+<style>
+  body { font: 13px/1.6 "Microsoft YaHei UI", system-ui, sans-serif; margin: 0; padding: 18px; background: #101828; color: #e6ebf5; }
+  h1 { font-size: 15px; margin: 0 0 10px; }
+  #stage { position: relative; height: 380px; border: 1px solid #2b3550; border-radius: 12px;
+           background: linear-gradient(180deg, #1b2440 0%, #121a2e 100%); overflow: hidden; }
+  #stage .overlayLayer { position: absolute; }
+  pre { margin: 14px 0 0; padding: 12px; background: #0b1220; border: 1px solid #2b3550; border-radius: 10px; }
+  .ok { color: #63e6a8; }
+  .bad { color: #ff8b8b; }
+</style>
+</head>
+<body>
+<h1>自嘲熊桌宠 · 离线集成测试（假 loader + 假槽位 + 假会话）</h1>
+<div id="stage"></div>
+<pre id="result">running…</pre>
+
+<script src="dsh-shim.js"></script>
+<script>
+/**
+ * 加载被测 bundle。两种布局都要能跑：
+ *   开发工作区  harness/ → ../plugin/lib/client.js
+ *   GitHub 仓库 test/    → ../lib/client.js
+ */
+function loadBundle() {
+  const candidates = ["../lib/client.js", "../plugin/lib/client.js"];
+  return candidates.reduce(
+    (chain, path) =>
+      chain.then((found) =>
+        found ??
+        new Promise((resolve) => {
+          const tag = document.createElement("script");
+          tag.src = path;
+          tag.onload = () => resolve(path);
+          tag.onerror = () => resolve(null);
+          document.head.append(tag);
+        }),
+      ),
+    Promise.resolve(null),
+  );
+}
+
+(async () => {
+  const lines = [];
+  const results = [];
+  const check = (name, pass, detail) => {
+    results.push(pass);
+    lines.push(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? "  — " + detail : ""}`);
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  try {
+    const stage = document.getElementById("stage");
+    // 假宿主层搬进可见舞台，方便截图
+    stage.append(document.querySelector(".overlayLayer"));
+
+    const bundlePath = await loadBundle();
+    check("找到并加载了插件 bundle", !!bundlePath, bundlePath ?? "两个候选路径都没找到");
+
+    const plugin = window.__zxLoadPlugin("dsh-client-ui-pet-zichaoxiong");
+    check("工厂导出 apply/inject", typeof plugin.apply === "function" && Array.isArray(plugin.inject),
+      `inject=${JSON.stringify(plugin.inject)}`);
+
+    const ctx = window.__zxHarness.state.ctx;
+    ctx.effect = ctx.effect.bind(ctx);
+    plugin.apply(ctx);
+
+    const rendered = window.__zxHarness.renderOverlays();
+    check("注册进 shell.overlay", rendered.length === 1, rendered.map((r) => r.cell).join(","));
+
+    const host = rendered[0]?.node.querySelector(".zx-pet-host");
+    check("宿主 div 存在", !!host);
+    check("宿主 div 关掉 pointer-events（不吃下层点击）",
+      host && getComputedStyle(host).pointerEvents === "none",
+      host ? getComputedStyle(host).pointerEvents : "no host");
+
+    const pet = stage.querySelector(".zx-pet");
+    check("桌宠已挂载", !!pet, pet ? pet.className : "missing");
+    const layer = stage.querySelector(".zx-pet-layer");
+    check("layer 点击穿透", layer && getComputedStyle(layer).pointerEvents === "none");
+    check("桌宠本体可交互", pet && getComputedStyle(pet).pointerEvents === "auto");
+
+    const frames = stage.querySelectorAll(".zx-sprite img");
+    check("7 帧素材内联", frames.length === 7, `frames=${frames.length}`);
+    check("首帧可见", frames[0] && frames[0].classList.contains("zx-on"));
+    check("图片是 data URL（无需静态路由）",
+      frames[0] && frames[0].src.startsWith("data:image/"), frames[0] ? frames[0].src.slice(0, 22) : "");
+    check("内联体积合理", frames[0] && frames[0].src.length < 40000, frames[0] ? `${Math.round(frames[0].src.length / 1024)}KB/frame` : "");
+
+    check("初始台词已出现", (stage.querySelector(".zx-bubble")?.textContent ?? "").length > 0,
+      stage.querySelector(".zx-bubble")?.textContent ?? "");
+
+    // ---------- 默认必须完全静止 ----------
+    const bob = stage.querySelector(".zx-bob");
+    check("默认静止（无 zx-animating）", !pet.classList.contains("zx-animating"), pet.className);
+    check("默认不播浮动动画", getComputedStyle(bob).animationName === "none",
+      getComputedStyle(bob).animationName);
+    check("默认定格在第 0 帧", frames[0].classList.contains("zx-on")
+      && [...frames].filter((f) => f.classList.contains("zx-on")).length === 1);
+
+    window.__zxHarness.setRunning(true);
+    check("running=true → busy", pet.classList.contains("zx-busy"), pet.className);
+    check("busy 也只换台词、不动身体", !pet.classList.contains("zx-animating"), pet.className);
+
+    await sleep(1400);
+    window.__zxHarness.setRunning(false);
+    check("running=false → done", pet.classList.contains("zx-done"), pet.className);
+    check("完成台词是「熊/人，…」体", /^[熊人]，/.test(stage.querySelector(".zx-bubble")?.textContent ?? ""),
+      stage.querySelector(".zx-bubble")?.textContent ?? "");
+
+    await sleep(7600);
+    check("安静后自己回到 idle", pet.classList.contains("zx-idle"), pet.className);
+
+    // ---------- 只有点击才动 ----------
+    const bubbleTextBeforeClick = stage.querySelector(".zx-bubble").textContent;
+    pet.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 200, clientY: 200 }));
+    pet.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, clientX: 200, clientY: 200 }));
+    check("单击换一句台词", stage.querySelector(".zx-bubble").textContent !== bubbleTextBeforeClick,
+      stage.querySelector(".zx-bubble").textContent);
+    check("单击后开始动", pet.classList.contains("zx-animating") && getComputedStyle(bob).animationName === "zx-bob",
+      `${pet.className} / ${getComputedStyle(bob).animationName}`);
+    check("单击有星星", stage.querySelectorAll(".zx-spark").length > 0);
+
+    await sleep(6200);
+    check("动画播完自动停", !pet.classList.contains("zx-animating"), pet.className);
+    check("停回静止帧", frames[0].classList.contains("zx-on")
+      && [...frames].filter((f) => f.classList.contains("zx-on")).length === 1);
+
+    // ---------- 大小可调 ----------
+    const menuButton = (label) => [...stage.querySelectorAll(".zx-menu button")].find((b) => b.textContent === label);
+    const sizeVar = () => pet.style.getPropertyValue("--zx-size").trim();
+    check("默认尺寸 168px", sizeVar() === "168px", sizeVar());
+    menuButton("大一点").click();
+    check("大一点 → 192px", sizeVar() === "192px", sizeVar());
+    menuButton("小一点").click();
+    menuButton("小一点").click();
+    check("小一点 ×2 → 144px", sizeVar() === "144px", sizeVar());
+    check("尺寸被记住", JSON.parse(localStorage.getItem("dsh-pet:zichaoxiong") ?? "{}").size === 144);
+
+    // ---------- 气泡要跟着尺寸一起缩放 ----------
+    const bubbleEl = stage.querySelector(".zx-bubble");
+    const bubbleFont = () => parseFloat(getComputedStyle(bubbleEl).fontSize);
+    check("小尺寸下气泡字号也变小（144px → ≈11.6px）",
+      Math.abs(bubbleFont() - (13.5 * 144) / 168) < 0.6, `${bubbleFont()}px`);
+    menuButton("大一点").click();
+    menuButton("大一点").click();
+    menuButton("大一点").click(); // 144 → 216
+    check("放大后气泡一起变大（216px → ≈17.4px）",
+      Math.abs(bubbleFont() - (13.5 * 216) / 168) < 0.6, `${bubbleFont()}px`);
+
+    // ---------- 气泡不能压住熊 ----------
+    pet.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 300, clientY: 300 }));
+    pet.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, clientX: 300, clientY: 300 }));
+    await sleep(340); // 等淡入结束再量，否则量到的是缩放中的中间态
+    check("默认位气泡在熊头顶上方、没压住熊",
+      !bubbleEl.classList.contains("zx-below")
+        && bubbleEl.getBoundingClientRect().bottom <= pet.getBoundingClientRect().top + 1,
+      `below=${bubbleEl.classList.contains("zx-below")} bubble.bottom=${Math.round(bubbleEl.getBoundingClientRect().bottom)} pet.top=${Math.round(pet.getBoundingClientRect().top)}`);
+
+    // ---------- 右键菜单要出现在熊附近 ----------
+    pet.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    const menu = stage.querySelector(".zx-menu");
+    check("右键弹出菜单", menu.classList.contains("zx-show"), menu.className);
+    const mr = menu.getBoundingClientRect();
+    const sr = stage.getBoundingClientRect();
+    const pr1 = pet.getBoundingClientRect();
+    check("菜单没飞到屏幕外", Math.abs(mr.left - pr1.left) < 260 && Math.abs(mr.top - pr1.top) < 300,
+      `menu=[${Math.round(mr.left)},${Math.round(mr.top)}] pet=[${Math.round(pr1.left)},${Math.round(pr1.top)}]`);
+    check("菜单完整在框内", mr.left >= sr.left - 1 && mr.right <= sr.right + 1 && mr.top >= sr.top - 1 && mr.bottom <= sr.bottom + 1);
+    check("菜单项符合预期（已去掉「说句话」）",
+      [...menu.querySelectorAll("button")].map((b) => b.textContent).join("/") === "大一点/小一点/回到右下角/藏起来",
+      [...menu.querySelectorAll("button")].map((b) => b.textContent).join("/"));
+
+    // ---------- 菜单按钮必须能被真正点到 ----------
+    // 真实点击序列里 pointerdown 会冒泡到熊；如果熊在这时抢走指针（setPointerCapture），
+    // 浏览器会把 click 重定向到熊上，按钮就"失灵"了。这里专门盯住这个回归。
+    const sizeBeforeClick = pet.style.getPropertyValue("--zx-size").trim();
+    const bigButton = menuButton("大一点");
+    bigButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 0, clientY: 0 }));
+    check("按菜单按钮不会触发熊的拖拽", !pet.classList.contains("zx-dragging"), pet.className);
+    bigButton.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, clientX: 0, clientY: 0 }));
+    bigButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    check("真实点击序列也能改大小",
+      pet.style.getPropertyValue("--zx-size").trim() !== sizeBeforeClick,
+      `${sizeBeforeClick} → ${pet.style.getPropertyValue("--zx-size").trim()}`);
+    check("改大小的按钮不收起菜单（方便连点）", menu.classList.contains("zx-show"), menu.className);
+    pet.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); // 收起
+
+    // ---------- 藏起来 / 叫回来 ----------
+    menuButton("藏起来").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const dock = stage.querySelector(".zx-dock");
+    check("藏起来后熊消失", pet.style.display === "none", `display=${pet.style.display || "(空)"}`);
+    check("藏起来后出现小圆钮", dock.classList.contains("zx-show"), dock.className);
+    dock.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    check("点小圆钮把熊叫回来",
+      pet.style.display === "" && !dock.classList.contains("zx-show"),
+      `display=${pet.style.display || "(空)"}`);
+    check("叫回来后说了句话", (stage.querySelector(".zx-bubble")?.textContent ?? "").length > 0,
+      stage.querySelector(".zx-bubble")?.textContent ?? "");
+    pet.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+    // ---------- 头顶没空间时翻到熊下面 ----------
+    pet.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 200, clientY: 200 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 200, clientY: 4 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: 200, clientY: 4 }));
+    await sleep(200);
+    check("拖到画面顶部时气泡翻到熊下面", bubbleEl.classList.contains("zx-below"), bubbleEl.className);
+    check("翻转后气泡不压住熊",
+      bubbleEl.getBoundingClientRect().top >= pet.getBoundingClientRect().bottom - 1,
+      `bubble.top=${Math.round(bubbleEl.getBoundingClientRect().top)} pet.bottom=${Math.round(pet.getBoundingClientRect().bottom)}`);
+
+    // ---------- 出错 ----------
+    window.__zxHarness.setError("boom: tool failed");
+    check("agent 报错 → error", pet.classList.contains("zx-error"), pet.className);
+    check("报错台词已切换", /^[熊人]，/.test(stage.querySelector(".zx-bubble")?.textContent ?? ""),
+      stage.querySelector(".zx-bubble")?.textContent ?? "");
+
+    // ---------- 藏起来时连点也不该堆积星星 ----------
+    // display:none 的元素不会触发 animationend，没有兜底清理就会无限堆积。
+    pet.style.display = "none";
+    for (let i = 0; i < 30; i += 1) {
+      pet.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 0, clientY: 0 }));
+      pet.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, clientX: 0, clientY: 0 }));
+    }
+    const sparksWhileHidden = stage.querySelectorAll(".zx-spark").length;
+    await sleep(1700); // 等兜底清理定时器跑完
+    check("隐藏时连点 30 次，星星不会堆积",
+      stage.querySelectorAll(".zx-spark").length <= 12,
+      `点击中 ${sparksWhileHidden} 个 → 1.7 秒后 ${stage.querySelectorAll(".zx-spark").length} 个`);
+    pet.style.display = "";
+
+    // ---------- 卸载干净 ----------
+    window.__zxHarness.disposeAll();
+    check("卸载后不留 DOM", !stage.querySelector(".zx-pet") && !document.getElementById("zx-pet-style"));
+
+    // ---------- 记录 ----------
+    const failed = results.filter((r) => !r).length;
+    document.title = failed === 0 ? "ALL PASS" : `${failed} FAILED`;
+    lines.push("", failed === 0 ? `ALL PASS (${results.length}/${results.length})` : `${failed} FAILED of ${results.length}`);
+    document.getElementById("result").innerHTML = lines
+      .map((l) => (l.startsWith("PASS") ? `<span class="ok">${l}</span>` : l.startsWith("FAIL") ? `<span class="bad">${l}</span>` : l))
+      .join("\n");
+  } catch (error) {
+    document.title = "HARNESS ERROR";
+    lines.push(`HARNESS ERROR: ${error && error.stack ? error.stack : error}`);
+    document.getElementById("result").textContent = lines.join("\n");
+  }
+})();
+</script>
+</body>
+</html>

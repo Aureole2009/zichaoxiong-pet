@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>桌宠插件 · 兜底挂载测试</title>
+<style>
+  body { font: 13px/1.6 "Microsoft YaHei UI", system-ui, sans-serif; margin: 0; padding: 18px; background: #101828; color: #e6ebf5; }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  p { margin: 0 0 14px; color: #9aa7bd; }
+  pre { padding: 12px; background: #0b1220; border: 1px solid #2b3550; border-radius: 10px; }
+  .ok { color: #63e6a8; } .bad { color: #ff8b8b; }
+</style>
+</head>
+<body>
+<h1>兜底挂载测试：layout 没有声明 shell.overlay</h1>
+<p>插件应在 4 秒后自己挂到 document.body 上（fixed 定位），而不是静默消失。</p>
+<pre id="result">running…</pre>
+
+<script>window.__zxSkipSlot = true;</script>
+<script src="dsh-shim.js"></script>
+<script>
+function loadBundle() {
+  const candidates = ["../lib/client.js", "../plugin/lib/client.js"];
+  return candidates.reduce(
+    (chain, path) =>
+      chain.then((found) =>
+        found ??
+        new Promise((resolve) => {
+          const tag = document.createElement("script");
+          tag.src = path;
+          tag.onload = () => resolve(path);
+          tag.onerror = () => resolve(null);
+          document.head.append(tag);
+        }),
+      ),
+    Promise.resolve(null),
+  );
+}
+
+(async () => {
+  const lines = [];
+  const results = [];
+  const check = (name, pass, detail) => {
+    results.push(pass);
+    lines.push(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? "  — " + detail : ""}`);
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  try {
+    const loaded = await loadBundle();
+    check("加载到插件 bundle", !!loaded, loaded ?? "没找到");
+
+    const plugin = window.__zxLoadPlugin("dsh-client-ui-pet-zichaoxiong");
+    plugin.apply(window.__zxHarness.state.ctx);
+
+    check("槽位回调被记下、但从未执行（真正模拟 layout 未声明）",
+      window.__zxHarness.state.pendingSlotCallbacks.length === 1
+        && window.__zxHarness.state.overlays.size === 0
+        && document.querySelectorAll(".zx-pet").length === 0,
+      `callbacks=${window.__zxHarness.state.pendingSlotCallbacks.length} 已注册槽位=${window.__zxHarness.state.overlays.size} pets=${document.querySelectorAll(".zx-pet").length}`);
+
+    // 兜底定时器是 4 秒，多等一会儿再判定
+    for (let i = 0; i < 30 && !document.querySelector(".zx-pet"); i += 1) await sleep(250);
+
+    const pet = document.querySelector(".zx-pet");
+    const layer = document.querySelector(".zx-pet-layer");
+    check("兜底后桌宠出现", !!pet, pet ? pet.className : "还是没有");
+    check("挂在 document.body 上", layer?.parentElement === document.body,
+      layer?.parentElement?.tagName ?? "(no layer)");
+    check("兜底时用 fixed 定位（脱离槽位）", layer && getComputedStyle(layer).position === "fixed",
+      layer ? getComputedStyle(layer).position : "n/a");
+    check("兜底后照样能交互（点击穿透/本体可点）",
+      layer && getComputedStyle(layer).pointerEvents === "none"
+        && pet && getComputedStyle(pet).pointerEvents === "auto");
+
+    await sleep(400);
+    check("兜底后照样有台词", (document.querySelector(".zx-bubble")?.textContent ?? "").length > 0,
+      document.querySelector(".zx-bubble")?.textContent ?? "");
+
+    // ---------- 兜底之后槽位才出现：不能变成两只熊 ----------
+    // 真实场景：layout 渲染得比 4 秒还慢（慢机器、慢皮肤），兜底先挂上了，
+    // 槽位随后才到。这时应该把兜底那只"升级"进槽位，而不是并排出现第二只。
+    for (const callback of window.__zxHarness.state.pendingSlotCallbacks) callback();
+    window.__zxHarness.renderOverlays();
+    await sleep(300);
+    const pets = document.querySelectorAll(".zx-pet");
+    check("槽位晚到时仍然只有一只熊", pets.length === 1, `pets=${pets.length}`);
+    check("留下的那只已经升级进槽位",
+      !!document.querySelector("[data-shell-overlay] .zx-pet") && !document.body.querySelector(":scope > .zx-pet-layer"),
+      `inSlot=${!!document.querySelector("[data-shell-overlay] .zx-pet")}`);
+    check("旧的样式表没有被重复注入",
+      document.querySelectorAll("#zx-pet-style").length === 1,
+      `${document.querySelectorAll("#zx-pet-style").length} 个`);
+    await sleep(400);
+    check("升级之后照样有台词", (document.querySelector(".zx-bubble")?.textContent ?? "").length > 0,
+      document.querySelector(".zx-bubble")?.textContent ?? "");
+
+    window.__zxHarness.disposeAll();
+    await sleep(200);
+    check("卸载后不留 DOM", !document.querySelector(".zx-pet") && !document.getElementById("zx-pet-style"));
+
+    const failed = results.filter((r) => !r).length;
+    document.title = failed === 0 ? "ALL PASS" : `${failed} FAILED`;
+    lines.push("", failed === 0 ? `ALL PASS (${results.length}/${results.length})` : `${failed} FAILED of ${results.length}`);
+    document.getElementById("result").innerHTML = lines
+      .map((l) => (l.startsWith("PASS") ? `<span class="ok">${l}</span>` : l.startsWith("FAIL") ? `<span class="bad">${l}</span>` : l))
+      .join("\n");
+  } catch (error) {
+    document.title = "HARNESS ERROR";
+    lines.push(`HARNESS ERROR: ${error && error.stack ? error.stack : error}`);
+    document.getElementById("result").textContent = lines.join("\n");
+  }
+})();
+</script>
+</body>
+</html>

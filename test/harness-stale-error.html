@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>桌宠插件 · 历史错误基线测试</title>
+<style>
+  body { font: 13px/1.6 "Microsoft YaHei UI", system-ui, sans-serif; margin: 0; padding: 18px; background: #101828; color: #e6ebf5; }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  p { margin: 0 0 14px; color: #9aa7bd; }
+  pre { padding: 12px; background: #0b1220; border: 1px solid #2b3550; border-radius: 10px; }
+  .ok { color: #63e6a8; } .bad { color: #ff8b8b; }
+</style>
+</head>
+<body>
+<h1>历史错误基线测试</h1>
+<p>会话里存着上一轮遗留的 <code>lastAgentError</code> 时，桌宠挂载后应保持安静（不能一出现就喊「熊，搞砸了」）；<br>
+但在场期间新冒出来的错误仍然要报。这个页面一开就带着一条旧错误。</p>
+<pre id="result">running…</pre>
+
+<script>
+  // 关键：在加载替身之前就放好那条「历史遗留」的错误
+  window.__zxPreError = "stale failure from an earlier turn";
+</script>
+<script src="dsh-shim.js"></script>
+<script>
+function loadBundle() {
+  const candidates = ["../lib/client.js", "../plugin/lib/client.js"];
+  return candidates.reduce(
+    (chain, path) =>
+      chain.then((found) =>
+        found ??
+        new Promise((resolve) => {
+          const tag = document.createElement("script");
+          tag.src = path;
+          tag.onload = () => resolve(path);
+          tag.onerror = () => resolve(null);
+          document.head.append(tag);
+        }),
+      ),
+    Promise.resolve(null),
+  );
+}
+
+(async () => {
+  const lines = [];
+  const results = [];
+  const check = (name, pass, detail) => {
+    results.push(pass);
+    lines.push(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? "  — " + detail : ""}`);
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  try {
+    const loaded = await loadBundle();
+    check("加载到插件 bundle", !!loaded, loaded ?? "没找到");
+
+    const plugin = window.__zxLoadPlugin("dsh-client-ui-pet-zichaoxiong");
+    const ctx = window.__zxHarness.state.ctx;
+    ctx.effect = ctx.effect.bind(ctx);
+    plugin.apply(ctx);
+    const rendered = window.__zxHarness.renderOverlays();
+
+    await sleep(400);
+
+    const pet = rendered[0]?.node.querySelector(".zx-pet");
+    check("桌宠挂载了", !!pet, pet?.className ?? "no pet");
+    check("带着历史遗留错误挂载时保持 idle", pet && !pet.classList.contains("zx-error"),
+      pet?.className ?? "no pet");
+    check("也没有替那条旧错误说话",
+      !/搞砸|摔了|出错了|有点慌/.test(document.querySelector(".zx-bubble")?.textContent ?? ""),
+      document.querySelector(".zx-bubble")?.textContent ?? "");
+
+    window.__zxHarness.setError("a brand new failure");
+    await sleep(200);
+    check("但在场时新出现的错误照样会报", pet.classList.contains("zx-error"), pet.className);
+    check("报的确实是新错误对应的台词",
+      /^[熊人]，/.test(document.querySelector(".zx-bubble")?.textContent ?? ""),
+      document.querySelector(".zx-bubble")?.textContent ?? "");
+
+    window.__zxHarness.disposeAll();
+    await sleep(200);
+    check("卸载后不留 DOM", !document.querySelector(".zx-pet") && !document.getElementById("zx-pet-style"));
+
+    const failed = results.filter((r) => !r).length;
+    document.title = failed === 0 ? "ALL PASS" : `${failed} FAILED`;
+    lines.push("", failed === 0 ? `ALL PASS (${results.length}/${results.length})` : `${failed} FAILED of ${results.length}`);
+    document.getElementById("result").innerHTML = lines
+      .map((l) => (l.startsWith("PASS") ? `<span class="ok">${l}</span>` : l.startsWith("FAIL") ? `<span class="bad">${l}</span>` : l))
+      .join("\n");
+  } catch (error) {
+    document.title = "HARNESS ERROR";
+    lines.push(`HARNESS ERROR: ${error && error.stack ? error.stack : error}`);
+    document.getElementById("result").textContent = lines.join("\n");
+  }
+})();
+</script>
+</body>
+</html>

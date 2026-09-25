@@ -1,0 +1,71 @@
+{
+  "name": "dsh-client-ui-pet-zichaoxiong",
+  "version": "1.0.0",
+  "description": "自嘲熊桌宠 — a floating desk pet for the DeepSeek Harness (DSH) web GUI. Sits still by default, animates when clicked, speaks in two moods (working / idle), mirrors the agent's state, never blocks the UI.",
+  "type": "module",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/src",
+    "cordis.patch.yml",
+    "assets",
+    "tools",
+    "docs",
+    "test",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "NOTICE.md"
+  ],
+  "scripts": {
+    "build": "node tools/build-client.mjs",
+    "test": "node test/verify-contract.mjs && node test/verify-bundler.mjs && node test/run-harness.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "desktop-pet",
+    "desk-pet",
+    "pet",
+    "zichaoxiong",
+    "joke-bear",
+    "client-plugin",
+    "web-gui"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aureole2009/zichaoxiong-pet.git"
+  },
+  "homepage": "https://github.com/Aureole2009/zichaoxiong-pet#readme",
+  "bugs": {
+    "url": "https://github.com/Aureole2009/zichaoxiong-pet/issues"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
